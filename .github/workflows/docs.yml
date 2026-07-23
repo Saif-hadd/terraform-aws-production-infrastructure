@@ -1,0 +1,28 @@
+name: Documentation Check
+
+on:
+  pull_request:
+    paths:
+      - '**/*.md'
+      - 'docs/**'
+      - 'README.md'
+
+jobs:
+  markdown-lint:
+    name: markdown lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Lint Markdown
+        uses: DavidAnson/markdownlint-cli2-action@v17
+        with:
+          globs: |
+            README.md
+            CONTRIBUTING.md
+            CODE_OF_CONDUCT.md
+            docs/**/*.md
+            modules/**/*.md
+            environments/**/*.md
+          config: '{ "MD013": false, "MD033": false }'
