@@ -1,4 +1,4 @@
-# Demo Platform — Production-Grade AWS EKS Platform
+# Production-Grade AWS EKS Platform
 
 <p align="center">
   <img src="assets/logo.svg" alt="Demo Platform" width="120" />
