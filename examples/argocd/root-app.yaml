@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/<your-org>/demo-platform-gitops
+    repoURL: https://github.com/your-github/demo-platform-gitops
     targetRevision: HEAD
     path: argocd
   destination:
