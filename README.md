@@ -1,340 +1,358 @@
-# Demo Platform — Production-Grade AWS EKS Infrastructure
+# Demo Platform - AWS EKS Infrastructure Reference
 
 <p align="center">
   <img src="assets/logo.svg" alt="Demo Platform" width="120" />
 </p>
 
 <p align="center">
-  A production-ready, open-source reference implementation of an AWS EKS Kubernetes platform foundation built with modular Terraform, IRSA, and Karpenter.
+  A production-oriented AWS EKS infrastructure reference built with modular Terraform, multi-environment configuration, IRSA, and AWS-side Karpenter infrastructure.
 </p>
 
 <p align="center">
-  <img alt="Terraform" src="https://img.shields.io/badge/Terraform-≥1.14-7B42BC?logo=terraform&logoColor=white" />
+  <img alt="Terraform" src="https://img.shields.io/badge/Terraform-%3E%3D1.14-7B42BC?logo=terraform&logoColor=white" />
   <img alt="AWS EKS" src="https://img.shields.io/badge/AWS%20EKS-1.34-FF9900?logo=amazon-eks&logoColor=white" />
   <img alt="Kubernetes" src="https://img.shields.io/badge/Kubernetes-1.34-326CE5?logo=kubernetes&logoColor=white" />
-  <img alt="Karpenter" src="https://img.shields.io/badge/Karpenter-Autoscaling-00A9E0?logo=karpenter&logoColor=white" />
-  <img alt="IRSA" src="https://img.shields.io/badge/IRSA-Least%20Privilege-232F3E?logo=amazon-aws&logoColor=white" />
+  <img alt="Karpenter" src="https://img.shields.io/badge/Karpenter-AWS--side%20infra-00A9E0" />
   <img alt="License" src="https://img.shields.io/badge/License-MIT-green" />
-  <img alt="PRs Welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen" />
 </p>
 
 ---
 
 ## Overview
 
-**Demo Platform** is a production-grade AWS infrastructure reference repository. It provisions a multi-environment EKS Kubernetes platform foundation using modular Terraform — VPC networking, the EKS control plane, Karpenter autoscaling infrastructure, and least-privilege IAM roles for Kubernetes workloads (IRSA).
+**Demo Platform** is an open-source reference repository for provisioning the AWS infrastructure layer of an EKS-based Kubernetes platform.
 
-This repository deliberately stops at the AWS boundary. It does **not** deploy Helm charts, Kubernetes manifests, or cluster add-ons — those belong to a separate GitOps repository reconciled by Argo CD. The Terraform outputs (IAM role ARNs, the OIDC provider, the Karpenter node role, and the interruption queue) are the contract between this infrastructure layer and that GitOps layer.
+The repository uses Terraform to compose reusable modules for:
 
-The goal of this repository is to serve as an educational and production reference for:
+- VPC networking
+- Amazon EKS clusters
+- EKS managed node groups
+- AWS-side Karpenter infrastructure
+- IAM roles for Kubernetes service accounts
+- A scoped Secrets Manager access policy for an external API mTLS pattern
+- Optional additional security group ingress rules
+- S3, DynamoDB, and KMS resources for Terraform remote state
 
-- **Infrastructure as Code** with modular, multi-environment Terraform
-- **Platform Engineering** with Karpenter autoscaling infrastructure and IRSA
-- **DevSecOps** with least-privilege IAM, private networking, and secret access patterns
-- **AWS architecture** with isolated VPCs, EKS, and remote state management
+This repository intentionally stops at the AWS infrastructure boundary. It does **not** deploy Helm releases, Kubernetes manifests, Kubernetes add-ons, monitoring stacks, or workloads. Those runtime components are expected to live in a separate GitOps repository reconciled by Argo CD.
 
-> This repository is a generalized, company-agnostic reference implementation. All names, domains, and identifiers are placeholders — replace them with your own values before deploying.
-
----
+The environment examples are useful as a platform engineering reference, but they are not hardened defaults for a live production account. For example, the committed `dev`, `staging`, and `prod` tfvars currently enable the public EKS API endpoint from `0.0.0.0/0`; restrict this before using the configuration beyond a demo or lab account.
 
 ## Architecture
 
-<p align="center">
-  <img src="assets/architecture.svg" alt="Platform Architecture" />
-</p>
+The platform is split into two ownership layers:
 
-The platform follows a clear separation of concerns:
+| Layer | Owner | Responsibility | Implemented here |
+|---|---|---|---|
+| AWS infrastructure | Terraform | VPC, EKS, managed node groups, IAM, security groups, remote state | Yes |
+| Karpenter AWS integration | Terraform | Controller IAM role, node IAM role, SQS interruption queue, Pod Identity association | Yes |
+| Kubernetes runtime | External GitOps repo | Helm charts, add-ons, NodePools, workloads, monitoring | No |
+| GitOps bootstrap example | Argo CD manifest | Example root `Application` with placeholder repo URL | Example only |
 
-| Layer              | Tool             | Responsibility                                                        | In this repo? |
-|--------------------|------------------|-----------------------------------------------------------------------|---------------|
-| **Infrastructure** | Terraform        | VPC, EKS cluster, node groups, IAM roles, Karpenter AWS-side, SQS     | Yes           |
-| **GitOps runtime** | Argo CD (external) | Helm charts, Kubernetes manifests, add-ons, workloads              | No            |
-| **Autoscaling**    | Karpenter        | AWS-side IAM/roles/queue here; NodePool/EC2NodeClass in GitOps        | AWS side only |
-| **Networking**     | AWS VPC          | Public/private/intra subnets, NAT gateway, subnet discovery tags      | Yes           |
-| **Security**       | IRSA + IAM       | Pod identity roles, least-privilege policies, Secrets Manager access  | Yes           |
+Terraform outputs provide the contract between this infrastructure repository and the external GitOps layer:
 
-See [`docs/architecture.md`](docs/architecture.md) for the full design.
+- `cluster_name`
+- `cluster_endpoint`
+- `oidc_provider_arn`
+- `karpenter_queue_name`
+- `karpenter_node_iam_role_name`
+- `ebs_csi_irsa_role_arn`
+- `aws_load_balancer_controller_irsa_role_arn`
+- `external_api_mtls_irsa_role_arn`
 
----
+See [`docs/architecture.md`](docs/architecture.md) for a deeper design overview.
 
 ## What This Repository Provisions
 
-Everything below is created by Terraform in this repository:
-
 ### Networking (`modules/vpc`)
-- VPC with public, private, and intra subnets across multiple AZs
-- NAT gateway for private egress
-- Subnet discovery tags for Karpenter and AWS Load Balancer Controller
 
-### EKS Cluster (`modules/eks`)
-- EKS control plane (Kubernetes 1.34)
-- Managed node group running Bottlerocket for the Karpenter controller
-- Cluster and node security groups
-- Configurable public API endpoint access with CIDR restrictions
+- VPC per environment
+- Public, private, and intra subnet tiers
+- NAT gateway support, using one shared NAT gateway by default
+- Public subnet tags for internet-facing load balancers
+- Private subnet tags for internal load balancers and Karpenter discovery
 
-### Karpenter Infrastructure (`modules/karpenter`)
+### EKS (`modules/eks`)
+
+- Amazon EKS control plane
+- Configurable Kubernetes version, currently set to `1.34` in the environment tfvars
+- Configurable public API endpoint access and allowed CIDRs
+- EKS managed node groups, currently used for a small Bottlerocket Karpenter controller node group
+- Cluster and node security group outputs
+- OIDC provider output for IRSA
+
+### Karpenter AWS-Side Infrastructure (`modules/karpenter`)
+
 - Karpenter controller IAM role
-- Karpenter node IAM role (with SSM managed instance policy)
-- SQS interruption queue for spot/health event handling
-- EKS Pod Identity association for the controller
+- Karpenter node IAM role
+- SQS interruption queue
+- Optional EKS Pod Identity association, enabled by default
+- Additional node role policies, including `AmazonSSMManagedInstanceCore` by default
 
-### IAM Roles for Service Accounts (`modules/irsa`)
-- **EBS CSI Driver** IRSA role — scoped to `kube-system:ebs-csi-controller-sa`
-- **AWS Load Balancer Controller** IRSA role — scoped to `kube-system:aws-load-balancer-controller`
-- **External API mTLS** IRSA role — scoped to workload service accounts
+The Karpenter Helm chart, `NodePool`, and `EC2NodeClass` are not managed here.
+
+### IAM Roles For Service Accounts (`modules/irsa`)
+
+- EBS CSI Driver IRSA role scoped to `kube-system:ebs-csi-controller-sa`
+- AWS Load Balancer Controller IRSA role scoped to `kube-system:aws-load-balancer-controller`
+- External API mTLS workload IRSA role scoped through environment variables
+
+This module creates IAM roles only. It does not create Kubernetes ServiceAccounts.
 
 ### IAM Policies (`modules/iam`)
-- Least-privilege policy for reading external API mTLS material from AWS Secrets Manager
+
+- A scoped IAM policy for reading external API mTLS material from AWS Secrets Manager
+- Default resource scope based on the `demo-platform-external-api-mtls-*` secret name prefix, with support for explicit secret ARNs
 
 ### Security Groups (`modules/security`)
-- Optional additional ingress rules for the cluster and node security groups
+
+- Optional extra ingress rules for the EKS cluster security group
+- Optional extra ingress rules for the EKS node security group
+- No extra rules are created by default
 
 ### Remote State (`bootstrap/backend`)
-- S3 state bucket with versioning and SSE-KMS encryption
+
+- S3 bucket for Terraform state
+- S3 versioning
+- S3 public access block
+- SSE-KMS encryption for state objects
 - DynamoDB lock table with point-in-time recovery
 - Dedicated KMS key and alias
 
----
+## What Is Not Implemented Here
 
-## What Lives in the GitOps Repository (Not Here)
+The following are intentionally outside this repository:
 
-This repository creates the AWS infrastructure and IAM roles. A separate GitOps repository, reconciled by Argo CD, would consume the Terraform outputs and deploy:
+- Argo CD installation and lifecycle management
+- Helm releases
+- Kubernetes manifests
+- Karpenter `NodePool` and `EC2NodeClass`
+- EKS add-ons such as CoreDNS, kube-proxy, VPC CNI, and EBS CSI runtime installation
+- Secrets Store CSI Driver deployment
+- Prometheus, Grafana, Alertmanager, dashboards, and alert rules
+- OPA Gatekeeper, Kyverno, NetworkPolicies, WAF, service mesh, Velero, and AWS Backup policies
+- Terraform plan/apply automation with AWS credentials in CI
 
-| Component                       | Uses Terraform output                          |
-|---------------------------------|------------------------------------------------|
-| Karpenter Helm chart + NodePool | `karpenter_node_iam_role_name`, `karpenter_queue_name` |
-| AWS Load Balancer Controller    | `aws_load_balancer_controller_irsa_role_arn`   |
-| EBS CSI Driver                  | `ebs_csi_irsa_role_arn`                        |
-| External API mTLS workload      | `external_api_mtls_irsa_role_arn`              |
-| Argo CD root application        | `cluster_name`, `cluster_endpoint`             |
-
-An example Argo CD root `Application` is provided in [`examples/argocd/root-app.yaml`](examples/argocd/root-app.yaml) to show how the two layers connect.
-
----
+Some docs describe how these components fit into the intended GitOps architecture, but they are not provisioned by this repository.
 
 ## Repository Structure
 
 ```text
 .
-├── README.md                    # Project overview and quick start
-├── LICENSE                      # MIT license
-├── CONTRIBUTING.md              # How to contribute
-├── CODE_OF_CONDUCT.md           # Community standards
-├── MIGRATION.md                 # Safe state migration plan
-├── docs/                        # In-depth documentation
-│   ├── architecture.md
-│   ├── networking.md
-│   ├── security.md
-│   ├── terraform.md
-│   ├── gitops.md
-│   ├── eks.md
-│   ├── monitoring.md
-│   ├── disaster-recovery.md
-│   └── troubleshooting.md
-├── assets/                      # Diagrams and logo assets
-│   ├── logo.svg
-│   └── architecture.svg
-├── bootstrap/
-│   └── backend/                 # S3, DynamoDB, KMS for remote state
-├── modules/                     # Reusable Terraform modules
-│   ├── vpc/
-│   ├── eks/
-│   ├── iam/
-│   ├── irsa/
-│   ├── karpenter/
-│   └── security/
-├── environments/                # Per-environment configurations
-│   ├── dev/
-│   ├── staging/
-│   └── prod/
-├── examples/                    # Worked configuration examples
-│   ├── terraform/minimal-vpc-eks/
-│   └── argocd/root-app.yaml
-└── .github/                     # CI/CD and community files
-    ├── workflows/
-    ├── ISSUE_TEMPLATE/
-    └── PULL_REQUEST_TEMPLATE.md
+|-- README.md
+|-- LICENSE
+|-- CONTRIBUTING.md
+|-- CODE_OF_CONDUCT.md
+|-- MIGRATION.md
+|-- assets/
+|   |-- logo.svg
+|   `-- architecture.svg
+|-- bootstrap/
+|   `-- backend/
+|-- docs/
+|   |-- architecture.md
+|   |-- disaster-recovery.md
+|   |-- eks.md
+|   |-- gitops.md
+|   |-- monitoring.md
+|   |-- networking.md
+|   |-- security.md
+|   |-- terraform.md
+|   `-- troubleshooting.md
+|-- environments/
+|   |-- dev/
+|   |-- staging/
+|   `-- prod/
+|-- examples/
+|   |-- argocd/root-app.yaml
+|   `-- terraform/minimal-vpc-eks/
+|-- modules/
+|   |-- eks/
+|   |-- iam/
+|   |-- irsa/
+|   |-- karpenter/
+|   |-- security/
+|   `-- vpc/
+`-- .github/
+    |-- workflows/
+    |-- ISSUE_TEMPLATE/
+    `-- PULL_REQUEST_TEMPLATE.md
 ```
-
----
 
 ## Technologies
 
-| Category        | Technology                                         | In this repo? |
-|-----------------|----------------------------------------------------|---------------|
-| Cloud           | AWS (EKS, VPC, IAM, S3, DynamoDB, KMS, Secrets Manager, SQS) | Yes |
-| IaC             | Terraform ≥ 1.14, AWS provider 6.22.1             | Yes           |
-| Container       | Kubernetes 1.34, Bottlerocket nodes                | Yes (EKS)     |
-| Autoscaling     | Karpenter (AWS-side IAM, node role, SQS queue)     | Yes (AWS side)|
-| Pod identity    | IRSA (IAM Roles for Service Accounts)              | Yes           |
-| Remote state    | S3 backend, DynamoDB locking, KMS encryption       | Yes           |
-| GitOps          | Argo CD                                            | Example only  |
-| CI/CD           | GitHub Actions                                     | Yes           |
-
----
+| Category | Technology | Status |
+|---|---|---|
+| Cloud | AWS | Implemented |
+| Kubernetes platform | Amazon EKS | Implemented |
+| Infrastructure as Code | Terraform `>= 1.14.0` | Implemented |
+| Terraform provider | HashiCorp AWS provider `= 6.22.1` | Implemented |
+| Terraform modules | `terraform-aws-modules/vpc/aws` `6.0.0`, `terraform-aws-modules/eks/aws` `21.9.0`, `terraform-aws-modules/iam/aws` `5.0.0` | Implemented |
+| Node OS | Bottlerocket managed node group | Configured in environment tfvars |
+| Pod AWS access | OIDC-based IRSA for selected workloads | Implemented |
+| Karpenter | AWS-side IAM, node role, SQS queue, Pod Identity association | Implemented |
+| Remote state | S3 backend, DynamoDB locking, KMS encryption | Implemented |
+| GitOps | Argo CD | Example manifest only |
+| CI | GitHub Actions | Implemented for formatting, dev validation, and markdown linting |
 
 ## Quick Start
 
 ### Prerequisites
 
-- Terraform ≥ 1.14
-- AWS CLI configured with credentials
-- `kubectl` (for post-apply cluster access)
+- Terraform `>= 1.14.0`
+- AWS CLI configured with credentials for the target account
+- `kubectl` for post-apply cluster access
+- Helm, only if you want to install Argo CD manually
 
 ### 1. Bootstrap the Terraform backend
 
 ```bash
 cd bootstrap/backend
 terraform init
+terraform plan
 terraform apply
+cd ../..
 ```
 
-This creates the S3 state bucket, DynamoDB lock table, and KMS key.
+This creates the S3 state bucket, DynamoDB lock table, and KMS key used by the environment backends.
 
 ### 2. Provision an environment
+
+Review and edit `environments/dev/terraform.tfvars` before applying. In particular, replace the open EKS API endpoint CIDR with a trusted CIDR range for any non-demo use.
 
 ```bash
 cd environments/dev
 terraform init
 terraform plan
 terraform apply
-```
-
-### 3. Retrieve outputs for GitOps
-
-```bash
 terraform output
 ```
 
-The outputs (`cluster_name`, IRSA role ARNs, Karpenter node role, queue name) are the values you wire into your GitOps repository.
-
-### 4. Connect a GitOps repository (external)
-
-After the cluster is up, install Argo CD and point it at your GitOps repo:
+### 3. Configure local cluster access
 
 ```bash
+aws eks update-kubeconfig \
+  --region eu-south-2 \
+  --name "$(terraform output -raw cluster_name)"
+```
+
+### 4. Optionally bootstrap an external GitOps repository
+
+The included Argo CD manifest is only an example. Before applying it, replace the placeholder `repoURL` in [`examples/argocd/root-app.yaml`](examples/argocd/root-app.yaml) with your real GitOps repository.
+
+From the repository root:
+
+```bash
+helm repo add argo https://argoproj.github.io/argo-helm
+helm repo update
 kubectl create namespace argocd
 helm install argocd argo/argo-cd -n argocd
 kubectl apply -f examples/argocd/root-app.yaml
 ```
 
-Argo CD then deploys the Kubernetes add-ons and workloads using the IAM roles this repository created.
-
----
-
 ## Infrastructure Workflow
 
 ```text
-Developer → Git commit → CI validation → Terraform plan → Review → Terraform apply → AWS
+Change Terraform -> Open PR -> CI fmt/validate -> Review -> terraform plan -> terraform apply
 ```
 
-1. Infrastructure changes are made in `modules/` or `environments/`.
-2. A pull request triggers `terraform fmt` and `terraform validate` in CI.
-3. After review and merge, `terraform apply` provisions the change in the target environment.
-4. Each environment maintains its own remote state file in the shared S3 backend.
+1. Make infrastructure changes in `modules/` or `environments/`.
+2. Run `terraform fmt -recursive`.
+3. Run `terraform init -backend=false` and `terraform validate` in the affected environment.
+4. Run `terraform plan` with the real backend and review the diff.
+5. Apply only after checking that Terraform is not replacing core infrastructure unexpectedly.
+6. Pass Terraform outputs to the external GitOps repository as needed.
 
-See [`docs/terraform.md`](docs/terraform.md) for the full workflow and module reference.
-
----
+See [`docs/terraform.md`](docs/terraform.md) for module details and workflow guidance.
 
 ## GitOps Workflow
 
 ```text
-Git (source of truth) → Argo CD (reconciler) → Kubernetes cluster
+Terraform outputs -> External GitOps repo -> Argo CD -> Kubernetes cluster
 ```
 
-1. All Kubernetes runtime components are declared in a separate GitOps repository.
-2. Argo CD continuously reconciles cluster state to match Git.
-3. Terraform (this repo) provisions AWS infrastructure and IAM roles; Argo CD owns everything inside the cluster.
-4. The Terraform outputs are the contract between the two layers.
+This repository provides the AWS resources and IAM contracts that a GitOps repository can consume. The GitOps repository is expected to own runtime objects such as Helm charts, controller ServiceAccounts, Karpenter `NodePool` resources, `EC2NodeClass` resources, workloads, and monitoring.
 
-See [`docs/gitops.md`](docs/gitops.md) for the GitOps architecture and how outputs feed into it.
-
----
+See [`docs/gitops.md`](docs/gitops.md) for the intended integration model.
 
 ## Security
 
-- **Least-privilege IAM** — every workload gets a scoped IRSA role, never the node instance profile
-- **Private networking** — nodes run in private subnets; the API endpoint can be restricted by CIDR
-- **KMS-encrypted state** — Terraform state is encrypted at rest with a dedicated KMS key
-- **State locking** — DynamoDB prevents concurrent state writes
-- **Secrets access pattern** — IAM policy grants scoped `secretsmanager:GetSecretValue` for mTLS material
-- **No secrets in Git** — all sensitive values are references, never literals
-- **Security groups** — cluster and node security groups with configurable ingress rules
+- Nodes are placed in private subnets.
+- The EKS public API endpoint is configurable, but the committed environment tfvars currently allow `0.0.0.0/0`.
+- Workload IAM access is modeled with scoped IRSA roles instead of node instance profile permissions.
+- Karpenter node roles include SSM access through `AmazonSSMManagedInstanceCore`.
+- Terraform state is stored in S3 with versioning, public access block, and SSE-KMS encryption.
+- DynamoDB state locking is enabled with point-in-time recovery.
+- The external API mTLS IAM policy is scoped to Secrets Manager read actions for selected secret ARNs or a configured name prefix.
+- No static AWS credentials or secret values are committed in the repository.
 
 See [`docs/security.md`](docs/security.md) for the security model and hardening checklist.
 
----
-
 ## CI/CD
 
-GitHub Actions workflows automate:
+GitHub Actions currently provides:
 
-- **Terraform formatting** — `terraform fmt -recursive -check` on every pull request
-- **Terraform validation** — `terraform init` and `terraform validate` on every pull request
-- **Documentation linting** — markdown linting on README and docs
+- Terraform formatting checks with `terraform fmt -recursive -check -diff`
+- Terraform initialization and validation for `environments/dev` only
+- Markdown linting for README, contributing docs, `docs/**/*.md`, and `modules/**/*.md`
+
+The CI does not currently run Terraform plans, apply infrastructure, or validate every environment.
 
 See [`.github/workflows/`](.github/workflows/) for workflow definitions.
 
----
+## Best Practices Demonstrated
 
-## Best Practices
-
-- **Module separation** — each module has a single responsibility and no cross-module coupling
-- **State isolation** — one state file per environment, never shared
-- **IRSA over node IAM** — pods assume scoped roles, never the node instance profile
-- **Karpenter over cluster autoscaler** — faster, simpler, bin-packing-aware provisioning
-- **Version pinning** — Terraform, providers, and modules are pinned for reproducibility
-- **No Helm/K8s in Terraform** — modules create AWS resources only; runtime is GitOps-managed
-- **Naming conventions** — kebab-case for resources, snake_case for Terraform variables
-
----
+- Modular Terraform with a small set of reusable infrastructure modules
+- One environment directory per deployment target
+- Separate remote state key per environment
+- Clear split between Terraform-owned AWS resources and GitOps-owned Kubernetes runtime
+- IRSA for selected workload AWS permissions
+- Pinned provider and upstream module versions
+- Migration guidance for moving runtime resources out of Terraform state
+- Optional security group rule module for environment-specific ingress hardening
 
 ## Future Improvements
 
-- [ ] Add VPC flow logs
-- [ ] Add EKS control plane logging configuration
-- [ ] Add OPA Gatekeeper / Kyverno policy examples
-- [ ] Add cost estimation with Infracost in CI
-- [ ] Add a production-hardened example with multi-AZ NAT and restricted endpoint
-- [ ] Add cross-region disaster recovery runbook
-- [ ] Add a companion GitOps repository as a linked example
-- [ ] Add `terraform plan` in CI (requires AWS credentials and remote state access)
-
----
+- Restrict committed non-demo endpoint CIDRs, especially for `prod`
+- Add an explicit production-hardened example with per-AZ NAT gateways
+- Add VPC flow logs
+- Add EKS control plane logging configuration
+- Expand CI validation to `staging`, `prod`, bootstrap, and examples
+- Add `terraform plan` checks in CI for trusted AWS contexts
+- Add policy-as-code examples for OPA Gatekeeper or Kyverno in a companion GitOps repository
+- Add cost estimation with Infracost
+- Add cross-region state replication guidance
+- Add a real companion GitOps repository example
+- Replace placeholder Argo CD `repoURL` before any real bootstrap
 
 ## Learning Objectives
 
-This repository is designed to teach and demonstrate:
+This repository demonstrates:
 
-1. How to structure multi-environment Terraform with reusable modules
-2. How to split infrastructure (Terraform) from runtime (GitOps) responsibilities
-3. How to implement IRSA for secure pod-to-AWS access
-4. How to configure Karpenter AWS-side infrastructure for autoscaling
-5. How to build a least-privilege IAM pattern for external API mTLS access via Secrets Manager
-6. How to manage remote state with S3, DynamoDB locking, and KMS encryption
-7. How to harden AWS infrastructure with private networking and scoped security groups
-
----
+1. How to structure Terraform for multiple AWS environments.
+2. How to wrap mature upstream Terraform modules with local platform modules.
+3. How to keep AWS infrastructure concerns separate from Kubernetes runtime concerns.
+4. How to expose Terraform outputs as a contract for GitOps.
+5. How to model OIDC-based IRSA roles for Kubernetes controllers and workloads.
+6. How to configure AWS-side Karpenter infrastructure without managing its Kubernetes objects in Terraform.
+7. How to bootstrap an encrypted, locked Terraform remote state backend.
+8. How to document migration paths away from Terraform-managed runtime resources.
 
 ## Troubleshooting
 
-See [`docs/troubleshooting.md`](docs/troubleshooting.md) for common issues and solutions.
+See [`docs/troubleshooting.md`](docs/troubleshooting.md) for common operational checks.
 
-Common questions:
+Common starting points:
 
-- **`terraform plan` wants to replace the cluster** — see [`MIGRATION.md`](MIGRATION.md)
-- **IRSA pod gets AccessDenied** — verify the service account annotation and trust policy
-- **Karpenter nodes not joining** — check the node IAM role and `EC2NodeClass`
-
----
+- If `terraform validate` reports missing modules, run `terraform init -backend=false` in the environment directory.
+- If Terraform wants to replace the EKS cluster, stop and review [`MIGRATION.md`](MIGRATION.md).
+- If an IRSA-enabled pod gets `AccessDenied`, verify the ServiceAccount annotation, OIDC trust policy, and policy attachment.
+- If Karpenter nodes do not join, compare the GitOps `EC2NodeClass` role name with `terraform output karpenter_node_iam_role_name`.
+- If the Argo CD example does not sync, replace the placeholder `repoURL` in `examples/argocd/root-app.yaml`.
 
 ## Contributing
 
-Contributions are welcome! Please read [`CONTRIBUTING.md`](CONTRIBUTING.md) and follow the [code of conduct](CODE_OF_CONDUCT.md).
-
----
+Contributions are welcome. Please read [`CONTRIBUTING.md`](CONTRIBUTING.md) and follow the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
-This project is licensed under the MIT License — see [`LICENSE`](LICENSE).
+This project is licensed under the MIT License. See [`LICENSE`](LICENSE).
