@@ -11,12 +11,12 @@ This migration is designed to avoid EKS cluster replacement and avoid downtime.
 
 ## 1. Bootstrap Or Adopt The Backend
 
-The backend block cannot create S3 versioning, KMS encryption, or DynamoDB locking. Those are managed in `terraform/bootstrap/backend`.
+The backend block cannot create S3 versioning, KMS encryption, or DynamoDB locking. Those are managed in `bootstrap/backend`.
 
 If the existing resources already exist, import them first:
 
 ```powershell
-cd terraform/bootstrap/backend
+cd bootstrap/backend
 terraform init
 terraform import aws_s3_bucket.terraform_state demo-platform-terraform-state
 terraform import aws_s3_bucket_public_access_block.terraform_state demo-platform-terraform-state
@@ -52,7 +52,7 @@ Keep the old object until the migration is fully verified.
 ## 3. Initialize Prod Environment
 
 ```powershell
-cd terraform/environments/prod
+cd environments/prod
 terraform init
 terraform state list
 ```
@@ -88,7 +88,7 @@ The command should return nothing.
 
 ## 5. Let Moved Blocks Re-home Infrastructure State
 
-`terraform/environments/prod/moved.tf` maps the old root addresses into the new module wrappers.
+`environments/prod/moved.tf` maps the old root addresses into the new module wrappers.
 
 Run:
 

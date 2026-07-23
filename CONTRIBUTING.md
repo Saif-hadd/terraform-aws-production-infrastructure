@@ -33,7 +33,7 @@ terraform version
 terraform fmt -recursive -check
 
 # Validate a specific environment
-cd terraform/environments/dev
+cd environments/dev
 terraform init -backend=false
 terraform validate
 ```

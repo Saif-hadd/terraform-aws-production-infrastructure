@@ -1,115 +1,53 @@
 # Monitoring
 
-This document describes the observability stack and how it fits into the GitOps workflow.
+This document describes how monitoring fits into the platform architecture. The monitoring stack itself is **not** deployed by this Terraform repository — it belongs to the GitOps layer reconciled by Argo CD. This document explains the intended design and how the infrastructure layer supports it.
 
-## Stack
+## Design Principle
 
-The monitoring stack is deployed via Argo CD (not Terraform) using the **kube-prometheus-stack** Helm chart:
+This repository creates the AWS infrastructure and IAM foundation. Monitoring components (Prometheus, Grafana, alerting) are Kubernetes workloads and therefore belong in the GitOps repository, not in Terraform.
 
-| Component   | Purpose                                        |
-|-------------|------------------------------------------------|
-| Prometheus  | Metrics scraping and storage                   |
-| Grafana     | Dashboards and visualization                   |
-| Alertmanager| Alert routing and deduplication                |
-| Node Exporter| Node-level metrics                            |
-| kube-state-metrics | Kubernetes object state metrics          |
+## Recommended Stack
 
-## Architecture
+A typical production setup uses the **kube-prometheus-stack** deployed via Argo CD:
 
-```text
-EKS Cluster
-  ├── Prometheus (scrapes metrics)
-  │     ├── kubelet / cAdvisor
-  │     ├── kube-state-metrics
-  │     ├── node-exporter
-  │     └── application pods (via annotations)
-  ├── Grafana (dashboards)
-  │     └── data source: Prometheus
-  └── Alertmanager
-        └── routes alerts to notification channels
-```
+| Component         | Purpose                                        |
+|-------------------|------------------------------------------------|
+| Prometheus        | Metrics scraping and storage                   |
+| Grafana           | Dashboards and visualization                   |
+| Alertmanager      | Alert routing and deduplication                |
+| Node Exporter     | Node-level metrics                             |
+| kube-state-metrics| Kubernetes object state metrics                |
 
-## Deployment
+## How This Repository Supports Monitoring
 
-The stack is defined in the GitOps repository and reconciled by Argo CD:
+The infrastructure layer provides the foundation that monitoring depends on:
 
-```yaml
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: kube-prometheus-stack
-  namespace: argocd
-spec:
-  source:
-    repoURL: https://github.com/<your-org>/demo-platform-gitops
-    path: charts/kube-prometheus-stack
-    helm:
-      valueFiles:
-        - values.yaml
-  destination:
-    namespace: monitoring
-    server: https://kubernetes.default.svc
-  syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
-```
+| Provided by this repo             | Used by monitoring for                          |
+|-----------------------------------|-------------------------------------------------|
+| EKS cluster                       | Hosting Prometheus and Grafana pods             |
+| Private subnets                   | Running monitoring pods without public exposure |
+| Karpenter node role + SQS queue   | Provisioning nodes for monitoring workloads     |
+| IRSA pattern                      | Template for granting monitoring pods AWS access (e.g., CloudWatch) |
+| EBS CSI IRSA role                 | Persistent storage for Prometheus data          |
+| Node security group               | Controlling access to scrape targets            |
 
-## Metrics Sources
+## IAM Considerations
 
-| Source             | Scrape target              | Metrics                  |
-|--------------------|----------------------------|--------------------------|
-| kubelet            | `https://<node>:10250/metrics` | Node and pod metrics |
-| cAdvisor           | `https://<node>:10250/metrics/cadvisor` | Container metrics |
-| kube-state-metrics | `kube-state-metrics.kube-system.svc` | K8s object state |
-| node-exporter      | `node-exporter.monitoring.svc` | Host metrics        |
+If monitoring workloads need AWS access (e.g., scraping CloudWatch metrics), follow the same IRSA pattern used by the EBS CSI and Load Balancer Controller roles:
 
-## Dashboards
+1. Create an IAM policy in the `iam` module
+2. Create an IRSA role in the `irsa` module scoped to the monitoring ServiceAccount
+3. Attach the policy to the role in the environment `main.tf`
+4. Annotate the ServiceAccount in the GitOps repository with the role ARN
 
-Grafana ships with the standard kube-prometheus-stack dashboards. Add custom dashboards by committing JSON to the GitOps repo and letting Argo CD sync them.
+This keeps the pattern consistent: Terraform owns IAM, GitOps owns the workload.
 
-Recommended dashboards:
+## What This Repository Does Not Include
 
-- Cluster overview (nodes, pods, CPU, memory)
-- Karpenter node provisioning
-- API server latency and error rate
-- Pod resource usage
-- Persistent volume usage (EBS CSI)
+- Prometheus / Grafana Helm charts or manifests
+- Alert rules or `PrometheusRule` resources
+- Dashboard JSON definitions
+- Alertmanager routing configuration
+- Long-term metrics storage (Amazon Managed Service for Prometheus, Thanos, Mimir)
 
-## Alerting
-
-Define alert rules in the GitOps repo as `PrometheusRule` resources. Route alerts via Alertmanager to:
-
-- Slack (via webhook)
-- PagerDuty
-- Email
-
-Example alerts:
-
-- `NodeCPUHigh` — node CPU > 80% for 10m
-- `PodCrashLooping` — pod restart rate above threshold
-- `KarpenterProvisioningFailed` — node provisioning errors
-- `PVNearlyFull` — persistent volume > 90% used
-
-## Retention
-
-Configure Prometheus retention in the Helm values:
-
-```yaml
-prometheus:
-  prometheusSpec:
-    retention: 15d
-    retentionSize: 50GB
-    storageSpec:
-      volumeClaimTemplate:
-        spec:
-          storageClassName: ebs-sc
-          resources:
-            requests:
-              storage: 100Gi
-```
-
-For long-term storage, consider:
-
-- Amazon Managed Service for Prometheus (remote write)
-- Thanos or Mimir for multi-cluster federation
+These all belong in the GitOps repository. This document exists to document the intended architecture and show how the infrastructure layer connects to it.

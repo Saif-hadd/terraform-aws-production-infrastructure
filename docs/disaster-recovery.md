@@ -62,7 +62,7 @@ aws s3 cp restored.tfstate \
 
 ### Scenario 2: Environment rebuild from scratch
 
-1. Bootstrap the backend if needed (`terraform/bootstrap/backend`).
+1. Bootstrap the backend if needed (`bootstrap/backend`).
 2. Run `terraform init` + `terraform apply` in the target environment.
 3. Reinstall Argo CD and point it at the GitOps repo.
 4. Argo CD reconciles all runtime components from Git.

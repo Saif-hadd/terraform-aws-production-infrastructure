@@ -5,7 +5,7 @@ This document describes the Terraform structure, module reference, workflow, and
 ## Directory Layout
 
 ```text
-terraform/
+.
 ├── bootstrap/
 │   └── backend/             # S3 + DynamoDB + KMS for remote state
 ├── modules/                 # Reusable, single-responsibility modules
@@ -20,8 +20,6 @@ terraform/
     ├── staging/
     └── prod/
 ```
-
-> The Terraform files currently live at the repository root. The `terraform/` layout above is the target structure — see the Future Improvements section of the README.
 
 Each environment directory contains:
 

@@ -36,7 +36,6 @@ gitops-repo/
 │   ├── aws-load-balancer-controller/
 │   ├── ebs-csi-driver/
 │   ├── secrets-store-csi-driver/
-│   ├── kube-prometheus-stack/
 │   └── external-api-workload/
 └── manifests/
     ├── karpenter-nodepool.yaml
@@ -98,11 +97,11 @@ terraform output ebs_csi_irsa_role_arn
 terraform output external_api_mtls_irsa_role_arn
 ```
 
-These values are wired into Helm values or Kustomize patches in the GitOps repo. Common patterns:
+These values are wired into Helm values or ServiceAccount annotations in the GitOps repo. Common patterns:
 
+- **Helm values file** — pass the role ARN via Argo CD `Application` spec
+- **ServiceAccount annotation** — annotate the service account with `eks.amazonaws.com/role-arn`
 - **ExternalSecret** — store the role ARN in AWS Secrets Manager and reference it
-- **Kustomize patches** — inject the role ARN into ServiceAccount annotations
-- **Helm values file** — pass values via Argo CD `Application` spec
 
 ## Why Not Terraform for Helm?
 
